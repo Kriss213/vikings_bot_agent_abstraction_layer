@@ -1,0 +1,10 @@
+# Request
+#string ugv_id
+int32 task_id
+string ugv_status
+---
+# Response
+bool success
+int32 task_id
+string reason
+#vikings_bot_agent_abstraction_layer/TaskMsg task # not working...
