@@ -1,11 +1,19 @@
+from typing import Dict, List, Tuple
 import json
 from std_msgs.msg import String
 import math
+from rclpy.clock import Clock
+from builtin_interfaces.msg import Time as TimeMsg
+from rclpy.time import Time
+
 
 STATUS_IDLE = 'idle'
 STATUS_BUSY = 'busy'
 
 class Task:
+    STATUS_COMPLETED = 2
+    STATUS_STARTED = 1
+    STATUS_PENDING = 0
     @classmethod
     def from_json(cls, json_data):
         try:
@@ -14,29 +22,42 @@ class Task:
             task_id = json_data.get("task_id")
             loader_id = json_data.get("loader_id")
             unloader_id = json_data.get("unloader_id")
-            # task_type = json_data.get("task_type")
-            # priority = json_data.get("priority")
+            priority = json_data.get("priority")
+            s, ns = json_data.get("spawn_time").get("sec"), json_data.get("spawn_time").get("nanosec")
+            spawn_time = Time(nanoseconds=int(str(s)+str(ns)))
+            #spawn_time.nanoseconds = int(str(json_data.get("spawn_time").get("sec"))+str(json_data.get("spawn_time").get("nanosec")))
         except Exception as e:
             raise ValueError(f"Invalid JSON data {json_data} -> {e}")
 
-        return cls(task_id, loader_id, unloader_id)
+        return cls(task_id, loader_id, unloader_id, priority, spawn_time=spawn_time)
 
-    def __init__(self, task_id, loader_id, unloader_id):# task_type, priority):
+    def __init__(self, task_id, loader_id, unloader_id, priority:int, spawn_time=None):
         self.task_id = task_id
         self.loader_id = loader_id
         self.unloader_id = unloader_id
-        self.status = "pending"
+        self.status = self.STATUS_PENDING
+        self.__spawn_time:Time = Clock().now() if spawn_time is None else spawn_time
+
         # self.task_type = task_type
-        # self.priority = priority
+        self.priority:int = priority
+    
+    def get_age(self) -> float:
+        """
+        Get the age of the task in seconds.
+        """
+        now = Clock().now()
+
+        return (now - self.__spawn_time).nanoseconds / 1e9
 
     def to_json(self):
+        spawn_time:TimeMsg = self.__spawn_time.to_msg()
         return json.dumps({
             "task_id": self.task_id,
             "loader_id": self.loader_id,
             "unloader_id": self.unloader_id,
+            "priority": self.priority,
+            "spawn_time": {"sec":spawn_time.sec, "nanosec":spawn_time.nanosec},
             "status": self.status,
-            # "task_type": self.task_type,
-            # "priority": self.priority
         })
 
 class Status:
@@ -51,10 +72,10 @@ class Status:
         except Exception as e:
             raise ValueError(f"Invalid JSON data {json_data} -> {e}")
         return cls(id, work_status, location)
-    def __init__(self, id, work_status, location):
+    def __init__(self, id, work_status, location:Tuple[float,float,float]):
         self.id = id
         self.work_status = work_status
-        self.location = location
+        self.location:Tuple[float,float,float] = location
     
     def to_json(self):
         return json.dumps({
@@ -63,93 +84,85 @@ class Status:
             "location": self.location
         })
 
+# class Task:
+#     STATUS_PENDING = 'pending'
+#     STATUS_STARTED = 'started'
+#     STATUS_COMPLETED = 'completed'
+
+#     def __init__(self, task_id: str, loader_id: str, unloader_id: str, priority: float = 1.0):
+#         self.task_id = task_id
+#         self.loader_id = loader_id
+#         self.unloader_id = unloader_id
+#         self.status = Task.STATUS_PENDING
+#         self.priority = priority
+#         self.spawn_time = Time(seconds=0)
+
+#     def get_age(self, current_time: Time):
+#         return (current_time.nanoseconds - self.spawn_time.nanoseconds) / 1e9
+
+#     def to_dict(self):
+#         return self.__dict__
+
+#     @staticmethod
+#     def from_dict(data):
+#         task = Task(data['task_id'], data['loader_id'], data['unloader_id'], data['priority'])
+#         task.status = data['status']
+#         task.spawn_time = Time(nanoseconds=int(data['spawn_time']))
+#         return task
+
+# class Status:
+#     def __init__(self, agent_id: str, work_status: str, location: Tuple[float, float, float]):
+#         self.id = agent_id
+#         self.work_status = work_status
+#         self.location:Tuple[float, float, float] = location
+
 class CBBA:
     """
     Consensus-Based Bundle Algorithm for multi-agent task allocation.
     """
-    def __init__(self, courier_status:Status, pub_bids, loaders:list, unloaders:list):
-        self.courier_status:Status = courier_status
-        self.bids:dict = {} # dictionary of bids. Populated by listening to other agent bids and by own bids.
-        self.available_tasks:list = [] # populated by listening to loaders that broadcast their tasks
-        self.bundle:list = [] # list of tasks that the agent is "claiming"
-        self.winnings_bids:dict = {} # dictionary of current winning bids for each task
+    def __init__(self, agent_id: str):
+        self.agent_id = agent_id
+        self.task_memory: Dict[str, Task] = {}
+        self.bids: Dict[str, float] = {}
+        self.winners: Dict[str, str] = {}
+        self.bundle: List[str] = []
 
-        # Implementation specific:
-        self.pub_bids = pub_bids # publisher for the winning bids
-        self.loader_statuses = loaders # list of active loaders
-        self.unloader_statuses = unloaders # list of active unloaders
+    def update_tasks(self, task: Task, now: Time):
+        if task.task_id not in self.task_memory:
+            task.spawn_time = now
+            self.task_memory[task.task_id] = task
 
-    def task_callback(self, msg: String):
-        """
-        Callback for task updates from loaders.
-        """
-        task = Task.from_json(msg.data)
-        # Check if the task is already in the available tasks list
-        if task.task_id in [t.task_id for t in self.available_tasks]:
-            return
-        
-        self.available_tasks.append(task)
+    def update_position(self, position: List[float]):
+        self.position = position
 
-    def compute_bid(self, task:Task) -> float:
-        """
-        Compute the bid for a given task. Get pickup and dropoff locations from the task.
-        """
-        # TODO add other factors to the bid calculation
-        # like battery capacity, etc.
+    def run_cbba(self, clock: Time) -> Dict:
+        self.bundle.clear()
+        available_tasks = [t for t in self.task_memory.values() if t.status == Task.STATUS_PENDING]
 
-        # For now calculate the bid based on the distance to the loader
-        loader_status:Status = next((l for l in self.loader_statuses if l.loader_id == task.loader_id), None)
-        if loader_status is None:
-            return 0.0 # return 0 if courier has no info about the loader
-        loader_x, loader_y = loader_status.location
-        c_x, c_y = self.courier_status.location
-        dx = loader_x - c_x
-        dy = loader_y - c_y
-        dist = math.hypot(dx, dy)
+        for task in sorted(available_tasks, key=lambda t: self.compute_bid(t, clock), reverse=True):
+            task_id = task.task_id
+            bid = self.compute_bid(task, clock)
+            if bid > self.bids.get(task_id, -math.inf):
+                self.bundle.append(task_id)
+                self.bids[task_id] = bid
+                self.winners[task_id] = self.agent_id
 
-        return 1/(dist+1e6) # bigger -> better
-
-    def run_cbba_iteration(self):
-        """
-        Run iteration of the CBBA algorithm.
-        Parse available tasks and create a bundle.
-        """
-        # Calculate the bid for each available task
-        # sort available tasks greedily by bid
-        #self.bundle.clear()
-        for task in sorted(self.available_tasks, key=lambda t: self.compute_bid(t), reverse=True):
-            bid = self.compute_bid(task)
-            self.bids[task.task_id] = bid
-            # Check if the bid is better than the current winning bid
-            # or if the task has no bid yet. Add it to the bundle if so.
-            if task.task_id not in self.winnings_bids or bid > self.winnings_bids[task.task_id]:
-                self.winnings_bids[task.task_id] = bid
-                if task not in self.bundle:
-                    self.bundle.append(task)
-
-    def publish_winning_bids(self):
-        """
-        Publish the winning bids to the other agents.
-        """
-        bid_msg = {
-            "courier_id": self.courier_status.id,
-            "winning_bids": self.winnings_bids
+        return {
+            'agent_id': self.agent_id,
+            'bids': self.bids,
+            'winners': self.winners,
+            'bundle': self.bundle
         }
 
-        msg = String(data=json.dumps(bid_msg))
-        self.pub_bids.publish(msg)
-        
-    def bid_callback(self, msg:String):
-        """
-        Listen to bids from other agents and update the winning bids.
-        """
-        msg_data = json.loads(msg.data)
-        # Skip if bid is from the same agent
-        if msg_data['courier_id'] == self.courier_status.id:
-            return
-        
-        heard_winning_bids:dict = msg_data['winning_bids']
-
+    def compute_bid(self, task: Task, clock: Time):
+        if task.status != Task.STATUS_PENDING:
+            return -math.inf
+        dx = self.position[0] - 0.0
+        dy = self.position[1] - 0.0
+        distance = math.hypot(dx, dy)
+        age_sec = task.get_age(clock)
+        boost = age_sec * task.priority
+        return 100.0 - distance + boost
 
         
 

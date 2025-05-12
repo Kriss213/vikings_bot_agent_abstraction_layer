@@ -2,15 +2,29 @@
 
 from launch import LaunchDescription
 from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 
-def generate_launch_description():
-    ld = LaunchDescription()
+def launch_setup(context, *args, **kwargs):
+    nodes = []
+
+    # args
+    courier_count = max(min(int(LaunchConfiguration('courier_count').perform(context)), 5), 1)
+    loader_count = max(min(int(LaunchConfiguration('loader_count').perform(context)), 5), 1)
+    unloader_count = max(min(int(LaunchConfiguration('unloader_count').perform(context)), 5), 1)
 
     # === Loader nodes ===
-    loader_positions = [(-2.0, -2.0), (-2.0, 0.0), (-2.0, 2.0)]
-    for i, (x, y) in enumerate(loader_positions):
+    loader_positions = [
+        (-1.9, -7.0, -1.67),
+        (-1.5, 6.0, -1.67),
+        (3.7, 6.2, -1.67),
+        (3.67, -3.9, 0.0),
+        (-11.0, 5.7, 0.0)
+    ]
+   
+    for i, (x, y, yaw) in enumerate(loader_positions[:loader_count]):
         loader_id = f'loader_{i+1}'
-        ld.add_action(Node(
+        nodes.append(Node(
             package='vikings_bot_agent_abstraction_layer',
             executable='loader.py',
             name=loader_id,
@@ -20,15 +34,24 @@ def generate_launch_description():
                 'loader_id': loader_id,
                 'loc_x': x,
                 'loc_y': y,
+                'loc_yaw': yaw,
                 'broadcast_interval': 0.5
             }]
         ))
 
     # === Unloader nodes ===
-    unloader_positions = [(4.0, -2.0), (4.0, 0.0), (4.0, 2.0)]
-    for i, (x, y) in enumerate(unloader_positions):
+    unloader_positions = [
+        (11.7, -2.0, 3.14),
+        (11.7, 1.85, 3.14),
+        (-12.0, -6.5, 0.0),
+        (-11.6, 0.6, 0.0),
+        (12.0, 6.0, 3.14)
+
+    ]
+  
+    for i, (x, y, yaw) in enumerate(unloader_positions[:unloader_count]):
         unloader_id = f'unloader_{i+1}'
-        ld.add_action(Node(
+        nodes.append(Node(
             package='vikings_bot_agent_abstraction_layer',
             executable='unloader.py',
             name=unloader_id,
@@ -38,16 +61,23 @@ def generate_launch_description():
                 'unloader_id': unloader_id,
                 'loc_x': x,
                 'loc_y': y,
+                'loc_yaw': yaw,
                 'broadcast_interval': 0.5
             }]
         ))
 
     # === Courier agents ===
-    courier_positions = [(-4.0, -2.0), (-4.0, -2.5), (-4.0, -1.0)]
-    for i, (x, y) in enumerate(courier_positions):
+    courier_positions = [
+        (10.0, 6.0, -1.7),
+        (10.0, -6.0, 1.7),
+        (-11.0, -5.0, 0.0),
+        (-7.0, 0.5, 0.0),
+        (2.75, -0.6, 3.14)
+    ]
+    for i, (x, y, yaw) in enumerate(courier_positions[:courier_count]):
         ugv_id = f'ugv_{i+1}'
         ns = f'vikings_bot_{i+1}'  # Namespace for navigation
-        ld.add_action(Node(
+        nodes.append(Node(
             package='vikings_bot_agent_abstraction_layer',
             executable='courier.py',
             namespace=ns,
@@ -57,8 +87,21 @@ def generate_launch_description():
             parameters=[{
                 'ugv_id': ugv_id,
                 'start_x': x,
-                'start_y': y
+                'start_y': y,
+                'start_yaw': yaw,
             }]
         ))
+    
+    
+    return nodes
 
-    return ld
+
+def generate_launch_description():
+    
+
+    return LaunchDescription([
+        DeclareLaunchArgument('courier_count', default_value='1'),
+        DeclareLaunchArgument('loader_count', default_value='5'),
+        DeclareLaunchArgument('unloader_count', default_value='5'),
+        OpaqueFunction(function=launch_setup),
+    ])

@@ -25,16 +25,17 @@ class TaskUnloader(Node):
         self.declare_parameter('unloader_id', value='unloader_1')
         self.declare_parameter('loc_x', value=0.0)
         self.declare_parameter('loc_y', value=0.0)
+        self.declare_parameter('loc_yaw', value=0.0)
         self.declare_parameter('broadcast_interval', value=5.0)
         self.declare_parameter('unloading_time', value=5.0)
         
-        x, y = float(self.get_parameter('loc_x').value), float(self.get_parameter('loc_y').value)
+        x, y, yaw = float(self.get_parameter('loc_x').value), float(self.get_parameter('loc_y').value), float(self.get_parameter('loc_yaw').value)
         self.broadcast_interval = self.get_parameter('broadcast_interval').value
         self.unloading_time = self.get_parameter('unloading_time').value
 
         # ===== Internal properties =====
         self.unloader_id = self.get_parameter('unloader_id').value
-        self.location = (x, y)
+        self.location = (x, y, yaw)
         self.status = Status(self.unloader_id, STATUS_IDLE, self.location)
 
         # ===== Publishers =====
@@ -52,7 +53,7 @@ class TaskUnloader(Node):
 
         # ==================
 
-        self.get_logger().info(f'Unloader ID: {self.unloader_id} at location {x}, {y}')
+        self.get_logger().info(f'Unloader ID: {self.unloader_id} at location {x}, {y}, {yaw}')
 
     def broadcast(self):
         # publish status
@@ -113,7 +114,7 @@ class TaskUnloader(Node):
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = self.status.id
         marker.id = 0
-        marker.type = Marker.SPHERE
+        marker.type = Marker.TEXT_VIEW_FACING
         marker.action = Marker.ADD
         marker.pose.position.x = float(self.location[0])
         marker.pose.position.y = float(self.location[1])
@@ -126,6 +127,7 @@ class TaskUnloader(Node):
         marker.color.g = 1.0  # green
         marker.color.b = 0.0
         marker.color.a = 1.0
+        marker.text = self.unloader_id
         marker.lifetime.sec = int(self.broadcast_interval * 2)
         self.pub_marker.publish(marker)
 
