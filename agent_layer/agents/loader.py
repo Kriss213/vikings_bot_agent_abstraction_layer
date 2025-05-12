@@ -17,6 +17,8 @@ from agent_layer.classes import Task, Status
 from visualization_msgs.msg import Marker
 from vikings_bot_agent_abstraction_layer.srv import LoadUnloadRequest
 from agent_layer.classes import STATUS_IDLE, STATUS_BUSY
+random.seed(42)
+
 
 class TaskLoader(Node):
     def __init__(self):
@@ -26,6 +28,7 @@ class TaskLoader(Node):
         self.declare_parameter('loader_id', value='loader_1')
         self.declare_parameter('loc_x', value=0.0)
         self.declare_parameter('loc_y', value=0.0)
+        self.declare_parameter('loc_yaw', value=0.0)
         self.declare_parameter('task_spawn_chance', value=0.3)
         self.declare_parameter('task_queue_size', value=10)
         self.declare_parameter('broadcast_interval', value=5.0)
@@ -35,11 +38,11 @@ class TaskLoader(Node):
         self.task_queue_size = self.get_parameter('task_queue_size').value
         self.broadcast_interval = self.get_parameter('broadcast_interval').value
         self.loading_time = self.get_parameter('loading_time').value
-        x, y = float(self.get_parameter('loc_x').value), float(self.get_parameter('loc_y').value)
+        x, y, yaw = float(self.get_parameter('loc_x').value), float(self.get_parameter('loc_y').value), float(self.get_parameter('loc_yaw').value)
         
         # ===== Internal properties =====
         self.loader_id = self.get_parameter('loader_id').value
-        self.location = (x, y)
+        self.location = (x, y, yaw)
         self.tasks:list[Task] = []
         self.status = Status(self.loader_id, STATUS_IDLE, self.location)
         self.available_unloaders = []
@@ -61,14 +64,15 @@ class TaskLoader(Node):
         
         # ==================
 
-        self.get_logger().info(f'Loader ID: {self.loader_id} at location {x}, {y}')
+        self.get_logger().info(f'Loader ID: {self.loader_id} at location {x}, {y}, {yaw}')
 
     def broadcast(self):
         if random.random() < self.task_spawn_chance and len(self.tasks) < self.task_queue_size and self.available_unloaders:
             task = Task(
             task_id=random.randint(1, 1000),
                 loader_id=self.loader_id,
-                unloader_id=random.choice(self.available_unloaders)
+                unloader_id=random.choice(self.available_unloaders), 
+                priority=random.randint(1, 10),
             )
             self.tasks.append(task)
             task_json = task.to_json()
@@ -111,8 +115,6 @@ class TaskLoader(Node):
             response.success = False
             response.reason = 'Loader is busy'
             return response
-        
-        self.get_logger().info("Check 1")
 
         # check if UGV is at loader (within 1m)
         dist_ugv_loader = ((self.location[0] - ugv_status.location[0])**2 + (self.location[1] - ugv_status.location[1])**2)**0.5
@@ -123,8 +125,6 @@ class TaskLoader(Node):
             response.success = False
             response.reason = 'UGV is too far from loader'
             return response
-        
-        self.get_logger().info("Check 2")
 
         # Check if the task is in queue
         task_id = request.task_id
@@ -133,8 +133,6 @@ class TaskLoader(Node):
             response.success = False
             response.reason = "Task not found in loader queue"
             return response
-        
-        self.get_logger().info("Check 3")
         
         # Set status to busy
         self.status.work_status = STATUS_BUSY
@@ -162,7 +160,7 @@ class TaskLoader(Node):
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = self.status.id
         marker.id = 0
-        marker.type = Marker.SPHERE
+        marker.type = Marker.TEXT_VIEW_FACING
         marker.action = Marker.ADD
         marker.pose.position.x = float(self.location[0])
         marker.pose.position.y = float(self.location[1])
@@ -175,6 +173,7 @@ class TaskLoader(Node):
         marker.color.g = 0.0
         marker.color.b = 0.0
         marker.color.a = 1.0
+        marker.text = self.loader_id
         marker.lifetime.sec = int(self.broadcast_interval * 2)
         self.pub_marker.publish(marker)
 
